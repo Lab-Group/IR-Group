@@ -6,7 +6,7 @@ from stemming.porter2 import stem
 # =========================
 # FILE PATHS
 # =========================
-DOC_FILE = r"C:\Users\fikir\Downloads\Telegram Desktop\cranfield-trec-dataset-main\cranfield-trec-dataset-main\cran.all.1400.xml"
+DOC_FILE = r"cranfield-trec-dataset-main/cran.all.1400.xml"
 INDEX_PATH = "inverted_index.p"
 DOCMAP_PATH = "docMap.p"
 DOC_LENGTHS_PATH = "doc_lengths.p"

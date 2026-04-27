@@ -8,7 +8,9 @@ es = Elasticsearch(
     verify_certs=False
 )
 
-path = r"C:\Users\fikir\Downloads\Telegram Desktop\cranfield-trec-dataset-main\cranfield-trec-dataset-main\cran.all.1400.xml"
+DATASET_PATH = "cranfield-trec-dataset-main/cran.all.1400.xml"
+
+path = DATASET_PATH
 
 start_time = time.time()
 

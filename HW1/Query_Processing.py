@@ -69,27 +69,23 @@ def tfidf(tf, df, N):
 
 # =========================
 # BM25
-# =========================
+
 def bm25(tf, df, dl, avgdl, N, k1=1.5, b=0.75):
     idf = math.log((N - df + 0.5) / (df + 0.5) + 1)
     denom = tf + k1 * (1 - b + b * dl / avgdl)
     return idf * (tf * (k1 + 1) / denom)
 
 
-# =========================
-# MAIN
-# =========================
+
 start = time.time()
 
-qry_path = r"C:\Users\fikir\Downloads\Telegram Desktop\cranfield-trec-dataset-main\cranfield-trec-dataset-main\cran.qry.xml"
+qry_path = r"cranfield-trec-dataset-main/cran.qry.xml"
 
 queries = load_queries(qry_path)
 
 print("Total Queries:", len(queries))
 
-# =========================
-# OUTPUT FILES (FIXED)
-# =========================
+
 files = {
     "es": open("es.txt", "w", encoding="utf-8"),
     "tfidf": open("tfidf.txt", "w", encoding="utf-8"),
@@ -97,9 +93,7 @@ files = {
     "bm25": open("bm25.txt", "w", encoding="utf-8"),
 }
 
-# =========================
-# PROCESS QUERIES
-# =========================
+
 for qid, qtext in queries.items():
 
     hits = es_search(qtext)
@@ -144,33 +138,23 @@ for qid, qtext in queries.items():
             score_tfidf += tfidf(tf, df, N)
             score_bm25 += bm25(tf, df, dl, avgdl, N)
 
-        # =========================
-        # WRITE ES
-        # =========================
+        
         files["es"].write(f"{qid} Q0 {doc_id} {rank} {score} Exp\n")
 
-        # =========================
-        # WRITE TF-IDF
-        # =========================
+
         files["tfidf"].write(f"{qid} Q0 {doc_id} {rank} {score_tfidf} Exp\n")
 
-        # =========================
-        # WRITE OKAPI
-        # =========================
+        
         files["okapi"].write(f"{qid} Q0 {doc_id} {rank} {score_okapi} Exp\n")
 
-        # =========================
-        # WRITE BM25
-        # =========================
+        
         files["bm25"].write(f"{qid} Q0 {doc_id} {rank} {score_bm25} Exp\n")
 
         rank += 1
 
     print("Processed Query", qid)
 
-# =========================
-# CLOSE FILES (VERY IMPORTANT)
-# =========================
+
 for f in files.values():
     f.close()
 

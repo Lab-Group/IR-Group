@@ -5,29 +5,21 @@ import time
 from bs4 import BeautifulSoup
 from collections import defaultdict
 
-# =========================
-# PATHS (CHANGE IF NEEDED)
-# =========================
-DATA_PATH = r"C:\Users\fikir\Downloads\Telegram Desktop\cranfield-trec-dataset-main\cranfield-trec-dataset-main"
 
-DOC_PATH = DATA_PATH + r"\cran.all.1400.xml"
-QUERY_PATH = DATA_PATH + r"\cran.qry.xml"
-QREL_PATH = DATA_PATH + r"\cranqrel.trec"
+DATA_PATH = "cranfield-trec-dataset-main"
 
-# =========================
-# TOKENIZER
-# =========================
+DOC_PATH = DATA_PATH + "/cran.all.1400.xml"
+QUERY_PATH = DATA_PATH + "/cran.qry.xml"
+QREL_PATH = DATA_PATH + "/cranqrel.trec"
+
 def tokenize(text):
     return re.findall(r'\w+', text.lower())
 
-# =========================
-# LOAD DOCUMENTS
-# =========================
+
 def load_documents(path):
     print("Loading documents...")
 
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        data = f.read()
+    with open(DOC_PATH, "r", encoding="utf-8", errors="ignore") as f:
 
     # IMPORTANT FIX: use html parser (NOT xml)
     soup = BeautifulSoup(data, "html.parser")
