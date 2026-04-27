@@ -1,16 +1,30 @@
-def score_evaluator(file_path):
+def score_evaluator(file_path, column_index):
 
-    with open(file_path, 'r') as File:
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
         score_holder = 0.0
-        for each_line in File:
-            # print each_line.split(' ')[1].strip('\n')
-            score_holder += float(each_line.split(' ')[1].strip('\n'))
-            # raw_input()
-        # print score_holder
+
+        for line in f:
+            parts = line.strip().split()
+
+            if len(parts) <= column_index:
+                continue
+
+            try:
+                score_holder += float(parts[column_index])
+            except:
+                continue
+
         return score_holder
 
-# score =
 
-hub_score = score_evaluator("hub.txt")
-# auth_score = score_evaluator(path_to_auth)
-print('Total hub score:', hub_score)
+# =========================
+# MAIN
+# =========================
+
+file_path = "hits_output.txt"
+
+hub_score = score_evaluator(file_path, 2)   # hub column
+auth_score = score_evaluator(file_path, 1)  # authority column
+
+print("Total hub score:", hub_score)
+print("Total authority score:", auth_score)

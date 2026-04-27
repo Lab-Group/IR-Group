@@ -1,56 +1,73 @@
-from elasticsearch import Elasticsearch
-import time
-from elasticsearch_dsl import Search
-import Canonicalizer
+from bs4 import BeautifulSoup
+import re
+from collections import defaultdict
 
-def scroller(docID):
-    for id in docID:
-        id = id.strip()
-        outlinks = set()
-        res = es.get(index="hw3_crawl", doc_type='document', id=id)
-        outlinks = set(res['_source'].get("outlinks").strip().split('\n'))
-        for ol in outlinks:
-            ol = ol.strip()
-            if ol in linkgraphTemp:
-                linkgraphTemp[ol].add(id)
-            else:
-                linkgraphTemp[ol] = set()
-                linkgraphTemp[ol].add(id)
+# =========================
+# DATASET PATH
+# =========================
+DATASET_PATH = "../cranfield-trec-dataset-main/cran.all.1400.xml"
 
-canon = Canonicalizer.Canonicalizer
-start_time = time.time()
-es = Elasticsearch()
-linkgraphTemp = {}
-linkGraph = {}
-sinkNodes = set()
-s = Search(using=es, index="hw3_crawl", doc_type='document')
-s = s.source([])
-docID = set(h.meta.id for h in s.scan())
-scroller(docID)
+# =========================
+# LOAD DATASET
+# =========================
+with open(DATASET_PATH, "r", encoding="utf-8", errors="ignore") as f:
+    data = f.read()
+docs = re.findall(r"<doc>(.*?)</doc>", data, re.DOTALL)
 
+documents = {}
 
-for ol in linkgraphTemp:
-    if ol in docID:
-        linkGraph[ol] = linkgraphTemp.get(ol)
-    if ol == '':
-        for link in linkgraphTemp.get(ol):
-            sinkNodes.add(link)
+for doc in docs:
 
-print(sinkNodes)
-print(len(sinkNodes))
+    docno_match = re.search(r"<docno>(.*?)</docno>", doc)
 
-outputFile = open("linkgraph.txt", "w")
-for ol in linkGraph:
-    line = ol
-    for il in linkGraph[ol]:
-        line += ' ' + il
-    outputFile.write(line +'\n')
-outputFile.close()
+    if docno_match:
+        doc_id = docno_match.group(1).strip()
 
-temp = time.time()-start_time
-print(temp)
-hours = temp//3600
-temp = temp - 3600*hours
-minutes = temp//60
-seconds = temp - 60*minutes
-print('%d:%d:%d' %(hours,minutes,seconds))
+        text = re.sub(r"<.*?>", " ", doc)
+
+        documents[doc_id] = text
+# =========================
+# TOKENIZER
+# =========================
+def tokenize(text):
+    return set(re.findall(r"[a-z]+", text.lower()))
+
+# =========================
+# BUILD GRAPH (SIMILARITY GRAPH)
+# =========================
+graph = defaultdict(set)
+
+doc_ids = list(documents.keys())
+
+# IMPORTANT: ensure all nodes exist
+for doc_id in doc_ids:
+    graph[doc_id] = set()
+
+for i in range(len(doc_ids)):
+    for j in range(i + 1, len(doc_ids)):
+
+        d1 = doc_ids[i]
+        d2 = doc_ids[j]
+
+        words1 = tokenize(documents[d1])
+        words2 = tokenize(documents[d2])
+
+        # similarity condition (tunable)
+        if len(words1.intersection(words2)) > 5:
+            graph[d1].add(d2)
+            graph[d2].add(d1)
+
+# =========================
+# SAVE LINK GRAPH
+# =========================
+with open("linkgraph.txt", "w", encoding="utf-8") as f:
+    for node in graph:
+        line = node
+
+        if graph[node]:
+            line += " " + " ".join(graph[node])
+
+        f.write(line + "\n")
+
+print("Graph built successfully!")
+print("Nodes:", len(graph))
