@@ -1,191 +1,100 @@
-from bs4 import BeautifulSoup
-import numpy as np
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.decomposition import LatentDirichletAllocation
-from sklearn.cluster import KMeans
 import os
+import re
 
-docMap = {}
-docText = []
-relDoc = {}
-T = 200
-W = 30
-C = 25
-VectorMatrix = None
-clusters = {}
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
 
-def buildDocText():
-    path = "AP_DATA/ap89_collection/"
-    i = 0
-    for filename in os.listdir(path):
-        if(filename != 'readme'):
-            file = open(path+filename, encoding='utf-8', errors='replace')
-            page = file.read()
-            validPage = "<root>" + page + "</root>"
-            soup = BeautifulSoup(validPage, 'xml')
-            docs = soup.find_all('DOC')
-            for doc in docs:
-                docMap[i] = doc.find('DOCNO').get_text().strip()
-                i+=1
-                texts = doc.find_all('TEXT')
-                text = ""
-                for txt in texts:
-                    text += txt.get_text()
-                #if i > 10000: Uncomment this to run for 10000 docs
-                    #return
 
-                docText.append(text)
+# =========================
+# LOAD CRANFIELD DATASET
+# =========================
 
-def printTopics2(model, feature_names):
-    text = ''
-    for topic_id, topic in enumerate(model.components_):
-        line = '\nTopic %d: ' % (int(topic_id + 1))
-        line += printTopicTopWords(topic, feature_names)
-        text += line
-        
-    return text
-                
-def printTopics(docRow, model, feature_names):
-    text = ''
-    for topic_id in range(0, len(docRow)):
-        line = '\nTopic %d: (%f)' % (int(topic_id + 1), round(docRow[topic_id], 10))
-        #line += printTopicTopWords(topic, feature_names)
-        text += line
-        
-    return text
+DATASET_PATH = os.path.join(
+    "..",
+    "cranfield-trec-dataset-main",
+    "cran.all.1400.xml"
+)
 
-def printDocs(docs_topic_distribution, model, feature_names):
-    print("Total Distributions: %d" % len(docs_topic_distribution))
-    folder = 'partB_clusters/'
-    for n in range(docs_topic_distribution.shape[0]):
-        text = "topics: {}\n {}".format(docMap[n], printTopics(docs_topic_distribution[n], model, feature_names))
-        f = open(folder + docMap[n] + '.txt', "w")
-        f.write(text)
-        f.close()
-        if n % 1000 == 0:
-            print("Finished %d" % n)
+print("Loading Cranfield dataset...")
 
-def printTopicTopWords(topic, feature_names):
-    return ''.join([feature_names[i] + ' ' + str(round(topic[i], 2))
-                         +' | ' for i in topic.argsort()[:-W - 1:-1]])
+with open(DATASET_PATH, "r", encoding="utf-8", errors="ignore") as f:
+    data = f.read()
 
-def runLDA():
-    print ("LDA")
-    global VectorMatrix, docText
-    stoplist = open('AP_DATA/stoplist.txt')
-    stopwords = []
-    for word in stoplist.readlines():
-        stopwords.append(word.replace('\n',''))
-    stoplist.close()
 
-    vectorizer = CountVectorizer(stop_words = stopwords, max_features = 10000)
-    sparseMatrix = vectorizer.fit_transform(docText)
-    lda = LatentDirichletAllocation(n_components = T, max_iter=5,
-                                    learning_method='online',
-                                    learning_offset=50., random_state=0)
-    lda.fit(sparseMatrix)
-    featureNames = vectorizer.get_feature_names()
-    VectorMatrix = lda.transform(sparseMatrix)
-    
-    f= open('partB_clusterTopics/topics.txt', 'w')
-    f.write(printTopics2(lda, featureNames))
-    f.close()
-    docText = None
-    # printDocs(lda.transform(sparseMatrix), lda, featureNames)
-    
+# =========================
+# PARSE DOCUMENTS
+# =========================
 
-def printClusters():
-    global clusters
-    f = open('partB_clusterTopics/clusters.txt', 'w')
-    for label in clusters:
-        line = 'Cluster %d: ' % label
-        line += ','.join(clusters[label])
-        line += '\n'
-        f.write(line)
+docs_raw = re.findall(r"<doc>(.*?)</doc>", data, re.DOTALL)
 
-    f.close()
+doc_ids = []
+documents = []
 
-def runKmeans():
-    print("K Means")
-    global clusters
-    kMeans = KMeans(n_clusters = W)
-    kMeans.fit(VectorMatrix)
-    for labelIndex in range(0, len(kMeans.labels_)):
-        if kMeans.labels_[labelIndex] not in clusters:
-            clusters[kMeans.labels_[labelIndex]] = set()
-        clusters[kMeans.labels_[labelIndex]].add(docMap[labelIndex])
-    
-    printClusters()
+for doc in docs_raw:
 
-def buildRelevantDocs():
-    global relDoc, mapDoc
-    f = open('qrels.adhoc.51-100.AP89.txt', "r")
-    for line in f.readlines():
-        words = line.split(' ')
-        if words[3][:-1] == '1':
-            if words[2] not in relDoc:
-                relDoc [words[2]]= set()
-            relDoc[words[2]].add(words[0])
+    docno = re.search(r"<docno>(.*?)</docno>", doc)
 
-    f.close()
+    if docno:
+        doc_id = docno.group(1).strip()
 
-def combinations_of_2(l):
-    for i, j in zip(*np.triu_indices(len(l), 1)):
-        yield l[i], l[j]
+        # remove tags and keep text
+        text = re.sub(r"<.*?>", " ", doc)
 
-def isSQ(doc1, doc2):
-    for query in relDoc[doc1]:
-        if query in relDoc[doc2]:
-            return True
-    return False
+        doc_ids.append(doc_id)
+        documents.append(text)
 
-def isSC(doc1, doc2):
-    for cluster in clusters:
-        if doc1 in clusters[cluster] and doc2 in clusters[cluster]:
-            return True
-    return False
 
-def isFetched(doc1, doc2):
-    return True # Comment this and Uncomment below to run for 10000
-    '''
-    flag1 = False
-    flag2 = False
-    for cluster in clusters:
-        if doc1 in clusters[cluster]:
-            flag1 = True
-        if doc2 in clusters[cluster]:
-            flag2 = True
-    return (flag1 and flag2)
-    '''
+print("Total documents loaded:", len(documents))
 
-def evaluate():
-    print("Evaluating")
-    global comb
-    SQSC = 0
-    SQDC = 0
-    DQSC = 0
-    DQDC = 0
-    for comb in combList:
-        doc1 = comb[0]
-        doc2 = comb[1]
-        if isFetched(doc1, doc2):
-            if isSQ(doc1, doc2) and isSC(doc1, doc2):
-                SQSC += 1
-            elif isSQ(doc1, doc2) and (not isSC(doc1, doc2)):
-                SQDC += 1
-            elif (not isSQ(doc1, doc2)) and isSC(doc1, doc2):
-                DQSC += 1
-            else:
-                DQDC += 1
 
-    accuracy = float((SQSC + DQDC))/(SQSC + DQDC + DQSC + SQDC)
-    return accuracy
+# =========================
+# TF-IDF VECTORIZATION
+# =========================
 
-buildDocText()
-print("Total docs files: %d" % len(docMap)) 
-runLDA()
-runKmeans()
-buildRelevantDocs()
-combList = list(combinations_of_2(list(relDoc.keys())))
-print(evaluate())
+vectorizer = TfidfVectorizer(
+    stop_words="english",
+    max_features=5000
+)
 
+X = vectorizer.fit_transform(documents)
+
+
+# =========================
+# PARTITION CLUSTERING
+# =========================
+
+K = 8
+
+model = KMeans(
+    n_clusters=K,
+    random_state=42,
+    n_init=10
+)
+
+labels = model.fit_predict(X)
+
+
+# =========================
+# STORE CLUSTERS
+# =========================
+
+clusters = {i: [] for i in range(K)}
+
+for i, label in enumerate(labels):
+    clusters[label].append(doc_ids[i])
+
+
+# =========================
+# SAVE RESULTS
+# =========================
+
+with open("partition_output.txt", "w", encoding="utf-8") as f:
+
+    for c in clusters:
+        f.write(f"\nCluster {c+1}:\n")
+        f.write(" ".join(clusters[c]))
+        f.write("\n")
+
+
+print("Partition clustering completed successfully!")
+print("Saved to partition_output.txt")

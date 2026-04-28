@@ -1,105 +1,156 @@
-from __future__ import division
-import string
-from stemming.porter2 import stem
-from string import digits
 import re
-import time
-from Stemmed_Stopwords_Removed_Index import TermVector
-from collections import OrderedDict
+import math
 import dill
+from collections import defaultdict
+from stemming.porter2 import stem
 
-def unpickler(file):
-    f = open(file, 'rb')
-    ds = dill.load(f)
-    f.close()
-    return ds
+# =========================
+# SETTINGS
+# =========================
+INDEX_PATH = "inverted_index.p"
+DOC_LENGTHS_PATH = "doc_lengths.p"
+QUERY_FILE = r"C:\Users\fikir\Downloads\Telegram Desktop\cranfield-trec-dataset-main\cranfield-trec-dataset-main\cran.qry.xml"
 
-def parseCatalog(file):
-    catalog = {}
-    catalogFile = open(file, 'r')
-    for line in catalogFile.readlines():
-        content = line.strip().split(',')
-        catalog[content[0]] = content[1:]
-    return catalog
+N = 1400
+k1 = 1.5
+b = 0.75
 
-def queryMaker():
-    f = open('QueryUpdated.txt', 'r')
-    queries = []
-    for line in f:
-        queries.append(re.sub('[\-\.\"\s]+', ' ', line).strip().translate(None, digits))
+stopWords = {
+    "a","an","the","is","are","was","were",
+    "in","on","of","to","and","for","with"
+}
+
+# =========================
+# LOAD DATA
+# =========================
+def load_index():
+    with open(INDEX_PATH, "rb") as f:
+        return dill.load(f)
+
+def load_doc_lengths():
+    with open(DOC_LENGTHS_PATH, "rb") as f:
+        return dill.load(f)
+
+def load_queries():
+    queries = {}
+    with open(QUERY_FILE, "r", encoding="utf-8", errors="ignore") as f:
+        data = f.read()
+
+    blocks = re.findall(r"<top>(.*?)</top>", data, re.DOTALL)
+
+    for block in blocks:
+        num = re.search(r"<num>\s*(\d+)", block)
+        title = re.search(r"<title>(.*?)</title>", block, re.DOTALL)
+
+        if num and title:
+            qid = int(num.group(1))
+            queries[qid] = title.group(1).strip()
+
     return queries
 
-def queryProcessor(query):
-    with open("/Users/Zion/Downloads/AP_DATA/stoplist.txt") as sfile:
-        stopWords = sfile.readlines()
-    stopWords = filter(None, stopWords)
-    keywords = ""
-    flag = 0
-    for word in query.split():
-        for sWord in stopWords:
-            if (word == sWord.strip()):
-                flag = 1
-                break
-        if (flag != 1):
-            keywords += word + " "
-        flag = 0
-    keywords = keywords.translate(None, string.punctuation)
-    return keywords.strip()
+# =========================
+# TOKENIZER
+# =========================
+def tokenize(text):
+    words = re.findall(r"[a-z]+", text.lower())
+    return [stem(w) for w in words if w not in stopWords and len(w) > 2]
 
-def getInfo(key, catalog, termMap, docMap):
-    keyInfo = OrderedDict()
-    invList = OrderedDict()
-    docDict = OrderedDict()
-    indexFile = open("Files/Stemmed/invertedFile0.txt", 'r')
-    offset = catalog.get(key)[0]
-    indexFile.seek(int(offset))
-    line = indexFile.readline()
-    df = line.split(':')[0].split(',')[1]
-    ttf = line.split(':')[0].split(',')[2]
-    keyInfo[key] = [df, ttf]
-    remStr = line.split(':')[1].split(';')
-    for item in remStr:
-        docno = item.split(',')[0]
-        docID = docMap.get(int(docno))
-        tf = int(item.split(',')[1])
-        pos = [int(e) for e in item.split(',')[2:len(item.split(','))]]
-        docDict[docID] = TermVector(tf, pos)
-    invList[key] = docDict
-    indexFile.close()
-    return invList, keyInfo
+# =========================
+# PROXIMITY
+# =========================
+def proximity_score(terms, index):
+    scores = defaultdict(float)
 
-def getParameters(query, qNo):
-    keywords = queryProcessor(query)
-    termVector = OrderedDict()
-    termStats = OrderedDict()
-    for key in keywords.split():
-        key = stem(key).lower()
-        invList, keyInfo= getInfo(key, catalog, termMap, docMap)
-        termVector.update(invList)
-        termStats.update(keyInfo)
-    f = open('Files/Stemmed/Pickles/termStats%s.p' % qNo, 'wb')
-    dill.dump(termStats, f)
-    f.close()
-    f = open('Files/Stemmed/Pickles/termVector%s.p' % qNo, 'wb')
-    dill.dump(termVector, f)
-    f.close()
+    for i in range(len(terms)):
+        for j in range(i + 1, len(terms)):
+            t1, t2 = terms[i], terms[j]
 
-start_time = time.time()
-docInfo = unpickler('Files/Stemmed/Pickles/docInfo.p')
-catalog = parseCatalog('Files/Stemmed/catalogFile.txt')
-termMap = unpickler('Files/Stemmed/Pickles/termMap.p')
-docMap = unpickler('Files/Stemmed/Pickles/docMap.p')
-# getInfo('govern', catalog, termMap, docMap)
-queries = queryMaker()
-qNo = 0
-for query in queries:
-    qNo += 1
-    getParameters(query, qNo)
-    print("Created %d termVector" % qNo)
-temp = time.time() - start_time
-print(temp)
-hours = temp // 3600
-temp = temp - 3600 * hours
-minutes = temp // 60
-seconds = temp - 60 * minutes
-print('%d:%d:%d' % (hours, minutes, seconds))
+            if t1 not in index or t2 not in index:
+                continue
+
+            docs1 = index[t1]
+            docs2 = index[t2]
+
+            common = set(docs1.keys()) & set(docs2.keys())
+
+            for doc in common:
+                pos1 = docs1[doc]["pos"]
+                pos2 = docs2[doc]["pos"]
+
+                if not pos1 or not pos2:
+                    continue
+
+                min_dist = min(abs(a - b) for a in pos1 for b in pos2)
+                scores[doc] += 1 / (min_dist + 1)
+
+    return scores
+
+# =========================
+# BM25
+# =========================
+def score(query, index, doc_lengths):
+    terms = tokenize(query)
+    scores = defaultdict(float)
+
+    avgdl = sum(doc_lengths.values()) / len(doc_lengths)
+
+    for term in terms:
+        if term not in index:
+            continue
+
+        postings = index[term]
+        df = len(postings)
+
+        idf = math.log((N - df + 0.5) / (df + 0.5) + 1)
+
+        for doc, data in postings.items():
+            tf = data["tf"]
+            dl = doc_lengths.get(doc, 1)
+
+            bm25 = ((k1 + 1) * tf) / (
+                k1 * ((1 - b) + b * (dl / avgdl)) + tf
+            )
+
+            scores[doc] += idf * bm25
+
+    # proximity boost
+    prox = proximity_score(terms, index)
+    for doc, val in prox.items():
+        scores[doc] += val
+
+    return scores
+
+# =========================
+# RUN + WRITE FILE
+# =========================
+def run():
+    print("LOADING INDEX...")
+    index = load_index()
+    print("INDEX TERMS:", len(index))
+
+    print("LOADING DOC LENGTHS...")
+    doc_lengths = load_doc_lengths()
+    print("DOCS:", len(doc_lengths))
+
+    queries = load_queries()
+    print("QUERIES:", len(queries))
+
+    results_file = open("results.txt", "w")
+
+    for qid, qtext in queries.items():
+        scores = score(qtext, index, doc_lengths)
+
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:10]
+
+        print(f"\nQUERY {qid}")
+        print(ranked)
+
+        for rank, (doc, score_val) in enumerate(ranked, start=1):
+            results_file.write(f"{qid} Q0 {doc} {rank} {score_val:.4f} run1\n")
+
+    results_file.close()
+    print("\nresults.txt saved successfully")
+
+# =========================
+if __name__ == "__main__":
+    run()

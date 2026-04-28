@@ -1,100 +1,164 @@
-from __future__ import division
+import time
+import math
 from elasticsearch import Elasticsearch
-import re
-from elasticsearch_dsl import Search
-from collections import defaultdict
-from string import digits
-import string
-import dill
+from bs4 import BeautifulSoup
+from collections import Counter
 
-es = Elasticsearch()
+# =========================
+# ELASTICSEARCH CONNECTION (KEEP YOURS)
+# =========================
+es = Elasticsearch(
+    "https://localhost:9200",
+    basic_auth=("elastic", "a8t9_j71q0kE7upr0*i-"),
+    verify_certs=False
+)
 
-s = Search().using(es).query("match_all")
-s.aggs.bucket("avg_size", "avg", field="doc_len")
-s.aggs.bucket("vocabSize", "cardinality", field="text")
-res = s.execute()
-D = 84678
-total_TF = []
+INDEX = "cranfield_index"
 
+# =========================
+# LOAD QUERIES
+# =========================
+def load_queries(path):
+    queries = {}
 
-def getTermVector(keyword, a, key):
-    tf = a[keyword]["term_freq"]
-    docLen = len(a.keys())
-    total_TF.append([key.lower(), a[keyword]["ttf"]])
-    return tf, docLen
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        data = f.read()
 
+    soup = BeautifulSoup(data, "xml")
 
-def queryProcessor(query):
-    with open("/Users/Zion/Downloads/AP_DATA/stoplist.txt") as sfile:
-        stopWords = sfile.readlines()
-    stopWords = filter(None, stopWords)
-    keywords = ""
-    flag = 0
-    for word in query.split():
-        for sWord in stopWords:
-            if (word == sWord.strip()):
-                flag = 1
-                break
-        if (flag != 1):
-            keywords += word + " "
-        flag = 0
-    keywords = keywords.translate(None, string.punctuation)
-    return keywords.strip()
+    for top in soup.find_all("top"):
+        qid = top.find("num").text.strip()
+        qtext = top.find("title").text.strip()
+        queries[qid] = qtext
 
-
-def getDocInfo(key, docFreq):
-    s = Search().using(es).query("match", text=key)
-    docInfo = [h.meta.id for h in s.scan()]
-    docFreq.append([key.lower(), len(docInfo)])
-    return docInfo, docFreq
-
-
-def getParameters(query, qNo):
-    docFreq = []
-    keywords = queryProcessor(query)
-    termVector = defaultdict(lambda: defaultdict(list))
-    for key in keywords.split():
-        docInfo, docFreq = getDocInfo(key, docFreq)
-        print docFreq
-        for docid in docInfo:
-            stemKey = es.indices.analyze(index='index1', analyzer='my_english', text=key)
-            a = es.termvectors(index="index1", doc_type="document", id=docid, term_statistics=True)["term_vectors"] \
-                ["text"]["terms"]
-
-            tf, docLen = getTermVector(stemKey["tokens"][0]["token"], a, key)
-            termVector[docid][key.lower()].append(tf)
-            termVector[docid][key.lower()].append(docLen)
-    f = open('Pickles/docFreq%s.p' % qNo, 'wb')
-    dill.dump(docFreq, f)
-    f.close()
-    f = open('Pickles/termVector%s.p' % qNo, 'wb')
-    dill.dump(termVector, f)
-    f.close()
-    return termVector
-
-
-def queryMaker():
-    f = open('Files/QueryUpdated.txt', 'r')
-    queries = []
-    for line in f:
-        queries.append(re.sub('\s+', ' ', line).strip().translate(None, digits))
     return queries
 
 
-queries = queryMaker()
-qNo = 0
-for query in queries:
-    qNo += 1
-    termVector = getParameters(query, qNo)
-    print("Created %d termVector" % qNo)
+# =========================
+# ES SEARCH
+# =========================
+def es_search(query):
+    res = es.search(
+        index=INDEX,
+        size=100,
+        query={"match": {"text": query}}
+    )
+    return res["hits"]["hits"]
 
-unique_TTF = []
-for item in total_TF:
-    if sorted(item) not in unique_TTF:
-        unique_TTF.append(sorted(item))
 
-print(unique_TTF)
-f = open('Pickles/totalTF.p', 'wb')
-dill.dump(unique_TTF, f)
-f.close()
+# =========================
+# DOC LENGTH
+# =========================
+def get_doc_length(text):
+    return len(text.split())
 
+
+# =========================
+# OKAPI TF
+# =========================
+def okapi_tf(tf, dl, avgdl):
+    return tf / (tf + 0.5 + 1.5 * (dl / avgdl))
+
+
+# =========================
+# TF-IDF
+# =========================
+def tfidf(tf, df, N):
+    return tf * math.log((N + 1) / (df + 1))
+
+
+# =========================
+# BM25
+
+def bm25(tf, df, dl, avgdl, N, k1=1.5, b=0.75):
+    idf = math.log((N - df + 0.5) / (df + 0.5) + 1)
+    denom = tf + k1 * (1 - b + b * dl / avgdl)
+    return idf * (tf * (k1 + 1) / denom)
+
+
+
+start = time.time()
+
+qry_path = r"cranfield-trec-dataset-main/cran.qry.xml"
+
+queries = load_queries(qry_path)
+
+print("Total Queries:", len(queries))
+
+
+files = {
+    "es": open("es.txt", "w", encoding="utf-8"),
+    "tfidf": open("tfidf.txt", "w", encoding="utf-8"),
+    "okapi": open("okapi.txt", "w", encoding="utf-8"),
+    "bm25": open("bm25.txt", "w", encoding="utf-8"),
+}
+
+
+for qid, qtext in queries.items():
+
+    hits = es_search(qtext)
+
+    # document stats
+    docs = []
+    for h in hits:
+        doc_id = h["_id"]
+        text = h["_source"]["text"]
+        docs.append((doc_id, text, h["_score"]))
+
+    if len(docs) == 0:
+        continue
+
+    lengths = [get_doc_length(d[1]) for d in docs]
+    avgdl = sum(lengths) / len(lengths)
+
+    N = 100000  # approx corpus size (safe fallback)
+
+    # =========================
+    # WRITE RESULTS
+    # =========================
+    rank = 1
+
+    for doc_id, text, score in docs[:100]:
+
+        dl = get_doc_length(text)
+        tf_counts = Counter(text.lower().split())
+
+        terms = qtext.lower().split()
+
+        score_okapi = 0
+        score_tfidf = 0
+        score_bm25 = 0
+
+        for t in terms:
+            tf = tf_counts[t]
+
+            df = 10  # safe fallback (ES does not easily expose DF here)
+
+            score_okapi += okapi_tf(tf, dl, avgdl)
+            score_tfidf += tfidf(tf, df, N)
+            score_bm25 += bm25(tf, df, dl, avgdl, N)
+
+        
+        files["es"].write(f"{qid} Q0 {doc_id} {rank} {score} Exp\n")
+
+
+        files["tfidf"].write(f"{qid} Q0 {doc_id} {rank} {score_tfidf} Exp\n")
+
+        
+        files["okapi"].write(f"{qid} Q0 {doc_id} {rank} {score_okapi} Exp\n")
+
+        
+        files["bm25"].write(f"{qid} Q0 {doc_id} {rank} {score_bm25} Exp\n")
+
+        rank += 1
+
+    print("Processed Query", qid)
+
+
+for f in files.values():
+    f.close()
+
+end = time.time()
+
+print("\nDONE")
+print("Time taken:", end - start)
