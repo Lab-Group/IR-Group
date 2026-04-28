@@ -1,142 +1,169 @@
-from bs4 import BeautifulSoup
-import numpy as np
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.decomposition import LatentDirichletAllocation
 import os
+import re
+import math
+from collections import defaultdict
 
-topBM25 = {}
-topQREL = {}
+# =========================
+# 1. LOAD DATASET
+# =========================
+DATASET_PATH = os.path.join(
+    "..",
+    "cranfield-trec-dataset-main",
+    "cran.all.1400.xml"
+)
 
-topicThreshold = 30
-topWords = 30
+print("Loading dataset from:")
+print(os.path.abspath(DATASET_PATH))
 
-def buildDict(file):
-    topDict = {}
-    for line in file.readlines():
-        words = line.split(' ')
-        if words[0] not in topDict:
-            topDict[words[0]] = set()
-        if len(topDict[words[0]]) < 1000:
-            topDict[words[0]].add(words[2])
+with open(DATASET_PATH, "r", encoding="utf-8", errors="ignore") as f:
+    data = f.read()
 
-    return topDict
-                
+# =========================
+# FIXED PARSING (WORKING)
+# =========================
+docs_raw = re.findall(r"<doc>(.*?)</doc>", data, re.DOTALL)
 
-def buildTopDocs(resultFile, model):
-    global topBM25, topQREL
-    f = open(resultFile)
-    if model == 'BM25':
-        topBM25 = buildDict(f)
-    elif 'QREL':
-        topQREL = buildDict(f)
-    f.close()
+documents = {}
 
+for doc in docs_raw:
+    docno = re.search(r"<docno>(.*?)</docno>", doc)
+    text = re.sub(r"<.*?>", " ", doc)
 
-def queryDocUnion(queryId):
-    return topBM25[queryId].union(topQREL[queryId])
+    if docno:
+        doc_id = docno.group(1).strip()
+        documents[doc_id] = text
+
+print("Total documents loaded:", len(documents))
 
 
-def getDocText(docFile, docId):
-    path = "AP_DATA/ap89_collection/"
-    file = open(path+docFile, encoding='utf-8', errors='replace')
-    page = file.read()
-    validPage = "<root>" + page + "</root>"
-    soup = BeautifulSoup(validPage, 'xml')
-    docs = soup.find_all('DOC')
-    for doc in docs:
-        if (doc.find('DOCNO').get_text().strip()) == docId:
-            texts = doc.find_all('TEXT')
-            print (len(texts))
-            input()
-            text = ""
-            for txt in texts:
-                text += txt.get_text()
-            file.close()
-            return text
+# =========================
+# SAFETY CHECK
+# =========================
+if len(documents) == 0:
+    print("ERROR: No documents loaded!")
+    exit()
 
-    return ''
-    
-def printTopics(model, feature_names, n_top_words, topTopics = {}):
-    text = ''
-    for topic_id, topic in enumerate(model.components_):
-        if len (topTopics) > 0:
-            if topic_id not in topTopics:
-                continue
-            line = '\nTopic %d (%f):' % (int(topic_id + 1), topTopics[topic_id])
-        else:
-            line = '\nTopic %d:' % (int(topic_id + 1))
-        line += printTopicTopWords(topic, feature_names, n_top_words)
-        text += line
-    return text
 
-def getTop10Topics(doc_topic):
-    topic_most_pr = doc_topic.argsort()[:-10-1:-1]
-    top = {}
-    for i in topic_most_pr:
-        top[i] = round(doc_topic[i], 5)
+# =========================
+# 2. TOKENIZATION
+# =========================
+def tokenize(text):
+    return re.findall(r"[a-z]+", text.lower())
 
-    return top
 
-def printDocs(docs_topic_distribution, feature_names, docMap, model, n_top_words):
-    text = ''
-    for n in range(docs_topic_distribution.shape[0]):
-        topic_most_pr = getTop10Topics(docs_topic_distribution[n])
-        text += "\ndoc {} top 10 topics: {}\n".format(docMap[n],
-                                            printTopics(model, feature_names, n_top_words, topic_most_pr))
+# =========================
+# 3. TF & DF
+# =========================
+tf = {}
+df = defaultdict(int)
 
-    return text
+for doc_id, text in documents.items():
+    words = tokenize(text)
+    tf[doc_id] = {}
 
-def printTopicTopWords(topic, feature_names, n_top_words):
-    return ''.join([feature_names[i] + ' ' + str(round(topic[i], 2))
-                         +' | ' for i in topic.argsort()[:-n_top_words - 1:-1]])
-        
-def runLDA():
-    stoplist = open('AP_DATA/stoplist.txt')
-    stopwords = []
-    for word in stoplist.readlines():
-        stopwords.append(word.replace('\n',''))
-    stoplist.close()
+    unique_words = set(words)
 
-    tot = 1
-    for queryId in topBM25:
-        if tot == 25:
-            break
-        if queryId in topQREL:
-            print (queryId)
-            queryDocs = queryDocUnion(queryId)
-            textDocs = []
-            docMap = {}
-            i = 0
-            for docId in queryDocs:
-                textDocs.append(getDocText(docId.split('-')[0], docId))
-                docMap[i] = docId
-                i+=1
-                
-            vectorizer = CountVectorizer(stop_words = stopwords)
-            sparseMatrix = vectorizer.fit_transform(textDocs)
+    for w in words:
+        tf[doc_id][w] = tf[doc_id].get(w, 0) + 1
 
-            lda = LatentDirichletAllocation(n_components = topicThreshold, max_iter=5, 
-                                        learning_method='online',                 
-                                        learning_offset=50., random_state=0)
+    for w in unique_words:
+        df[w] += 1
 
-            lda.fit(sparseMatrix)
 
-            f1 = open('partA_topics/query' + queryId + '.txt', "w")
-            f1.write(printTopics(lda, vectorizer.get_feature_names(), topWords))
-            f1.close()
-            
-            f2 = open('partA_docs/query' + queryId + '.txt', "w")
-            f2.write(printDocs(lda.transform(sparseMatrix), vectorizer.get_feature_names(), docMap, lda, topWords))
-            
-            f2.close()
-            
-            tot += 1
-    
+# =========================
+# 4. TF-IDF
+# =========================
+N = len(documents)
+tfidf = {}
 
-buildTopDocs('qrels.adhoc.51-100.AP89.txt', 'QREL')
-buildTopDocs('OkapiBM25_Results_File.txt', 'BM25')
+for doc_id in tf:
+    tfidf[doc_id] = {}
 
-runLDA()
+    for term in tf[doc_id]:
+        tf_val = tf[doc_id][term]
+        idf = math.log(N / (1 + df[term]))
+        tfidf[doc_id][term] = tf_val * idf
 
-        
-    
+
+# =========================
+# 5. COSINE SIMILARITY
+# =========================
+def cosine(d1, d2):
+    v1 = tfidf[d1]
+    v2 = tfidf[d2]
+
+    common = set(v1.keys()) & set(v2.keys())
+
+    dot = sum(v1[t] * v2[t] for t in common)
+
+    mag1 = math.sqrt(sum(x * x for x in v1.values()))
+    mag2 = math.sqrt(sum(x * x for x in v2.values()))
+
+    if mag1 == 0 or mag2 == 0:
+        return 0
+
+    return dot / (mag1 * mag2)
+
+
+# =========================
+# 6. K-MEANS CLUSTERING
+# =========================
+K = 5
+
+doc_ids = list(documents.keys())
+
+centroids = doc_ids[:K]
+clusters = {}
+
+for iteration in range(5):
+
+    clusters = {i: [] for i in range(K)}
+
+    # assign step
+    for doc in doc_ids:
+
+        best_cluster = 0
+        best_score = -1
+
+        for i in range(K):
+            score = cosine(doc, centroids[i])
+            if score > best_score:
+                best_score = score
+                best_cluster = i
+
+        clusters[best_cluster].append(doc)
+
+    # update step
+    new_centroids = []
+
+    for i in range(K):
+
+        if len(clusters[i]) == 0:
+            new_centroids.append(centroids[i])
+            continue
+
+        best_doc = clusters[i][0]
+        best_score = -1
+
+        for doc in clusters[i]:
+            sim = sum(cosine(doc, other) for other in clusters[i])
+
+            if sim > best_score:
+                best_score = sim
+                best_doc = doc
+
+        new_centroids.append(best_doc)
+
+    centroids = new_centroids
+
+
+# =========================
+# 7. OUTPUT
+# =========================
+with open("clusters_output.txt", "w", encoding="utf-8") as f:
+    for i in clusters:
+        f.write(f"\nCluster {i+1}:\n")
+        f.write(" ".join(clusters[i]) + "\n")
+
+print("Clustering completed successfully!")
+print("Saved to clusters_output.txt")
