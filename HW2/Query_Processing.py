@@ -19,28 +19,23 @@ def tokenize(text):
 def load_documents(path):
     print("Loading documents...")
 
-    with open(DOC_PATH, "r", encoding="utf-8", errors="ignore") as f:
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        data = f.read()
 
-    # IMPORTANT FIX: use html parser (NOT xml)
-    soup = BeautifulSoup(data, "html.parser")
-
-    docs = soup.find_all("doc")
+    # extract each <doc> block safely
+    docs = re.findall(r"<doc>(.*?)</doc>", data, re.DOTALL)
 
     corpus = {}
     doc_len = {}
 
-    for doc in docs:
-        docno = doc.find("docno")
+    for d in docs:
+        docno_match = re.search(r"<docno>(.*?)</docno>", d, re.DOTALL)
 
-        if docno:
-            doc_id = docno.text.strip()
+        if docno_match:
+            doc_id = docno_match.group(1).strip()
 
-            # extract ONLY text field properly
-            text_tag = doc.find("text")
-            if text_tag:
-                text = text_tag.get_text()
-            else:
-                text = doc.get_text()
+            # remove tags and clean text
+            text = re.sub(r"<.*?>", " ", d)
 
             tokens = tokenize(text)
 
@@ -50,17 +45,13 @@ def load_documents(path):
     print("Found docs:", len(corpus))
     return corpus, doc_len
 
-# =========================
-# INDEX STRUCTURE
-# =========================
+
 class TermVector:
     def __init__(self):
         self.tf = 0
         self.pos = []
 
-# =========================
-# BUILD INVERTED INDEX
-# =========================
+
 def build_index(corpus):
     index = defaultdict(lambda: defaultdict(TermVector))
 
@@ -71,14 +62,12 @@ def build_index(corpus):
 
     return index
 
-# =========================
-# LOAD QUERIES
-# =========================
+
 def load_queries(path):
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         data = f.read()
 
-    soup = BeautifulSoup(data, "xml")
+    soup = BeautifulSoup(data, "lxml-xml")
     queries = {}
 
     for q in soup.find_all("top"):
@@ -92,9 +81,7 @@ def load_queries(path):
 
     return queries
 
-# =========================
-# SCORING FUNCTIONS
-# =========================
+
 def okapi_tf(tf, dl, avg_dl):
     return tf / (tf + 0.5 + 1.5 * (dl / avg_dl))
 
@@ -106,9 +93,7 @@ def bm25(tf, df, N, dl, avg_dl, k1=1.5, b=0.75):
     denom = tf + k1 * (1 - b + b * (dl / avg_dl))
     return idf * (tf * (k1 + 1)) / denom
 
-# =========================
-# PROXIMITY MODEL
-# =========================
+
 def proximity(query_terms, index):
     scores = defaultdict(float)
 
@@ -133,9 +118,7 @@ def proximity(query_terms, index):
 
     return scores
 
-# =========================
-# RUN QUERY
-# =========================
+
 def run_query(query, index, corpus, doc_len, model):
     scores = defaultdict(float)
 
@@ -168,9 +151,7 @@ def run_query(query, index, corpus, doc_len, model):
 
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
-# =========================
-# MAIN
-# =========================
+
 def main():
     start = time.time()
 

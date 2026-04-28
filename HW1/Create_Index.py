@@ -1,48 +1,73 @@
-from bs4 import BeautifulSoup
 import time
+import os
+import re
 from elasticsearch import Elasticsearch
 
+# -----------------------------
+# Elasticsearch connection
+# -----------------------------
 es = Elasticsearch(
     "https://localhost:9200",
     basic_auth=("elastic", "a8t9_j71q0kE7upr0*i-"),
     verify_certs=False
 )
 
-DATASET_PATH = "cranfield-trec-dataset-main/cran.all.1400.xml"
+# -----------------------------
+# Dataset path (safe & correct)
+# -----------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_PATH = os.path.join(
+    BASE_DIR,
+    "..",
+    "cranfield-trec-dataset-main",
+    "cran.all.1400.xml"
+)
 
-path = DATASET_PATH
-
+# -----------------------------
+# Start indexing
+# -----------------------------
 start_time = time.time()
 
-with open(path, "r", encoding="utf-8", errors="ignore") as file:
-    data = file.read()
+# Read file as raw text (important for Cranfield dataset)
+with open(DATASET_PATH, "r", encoding="utf-8", errors="ignore") as f:
+    data = f.read()
 
-# wrap in root because XML is not always single-rooted
-soup = BeautifulSoup(data, "xml")
+# Extract all <doc> blocks using regex
+docs = re.findall(r"<doc>(.*?)</doc>", data, re.DOTALL)
 
-docs = soup.find_all("doc")
+print("Total docs found:", len(docs))
 
 i = 0
 
-for doc in docs:
-    doc_id = doc.find("docno")
-    text = doc.get_text(separator=" ")
+# -----------------------------
+# Indexing loop
+# -----------------------------
+for d in docs:
+    # extract doc id
+    docno_match = re.search(r"<docno>(.*?)</docno>", d, re.DOTALL)
 
-    if doc_id:
-        jsonDoc = {
-            "text": text
-        }
+    # clean text (remove tags)
+    text = re.sub(r"<.*?>", " ", d)
+
+    if docno_match:
+        doc_id = docno_match.group(1).strip()
 
         es.index(
             index="cranfield_index",
-            id=doc_id.text.strip(),
-            document=jsonDoc
+            id=doc_id,
+            document={"text": text}
         )
 
         i += 1
-        print("Indexed:", i)
 
+        if i % 100 == 0:
+            print("Indexed:", i)
+
+# -----------------------------
+# Done
+# -----------------------------
 print("Done indexing")
+print("Total indexed:", i)
 
 end_time = time.time()
 print("Time:", end_time - start_time)
