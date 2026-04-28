@@ -63,7 +63,7 @@ X = vectorizer.fit_transform(documents)
 # PARTITION CLUSTERING
 # =========================
 
-K = 5
+K = 8
 
 model = KMeans(
     n_clusters=K,
